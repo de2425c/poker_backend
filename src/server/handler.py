@@ -80,14 +80,15 @@ class MessageHandler:
             # Get snapshot FIRST (before registering for broadcasts)
             snapshot = await self._manager.get_snapshot(user_id)
 
-            # Auto-start hand when we reach 3 players (if no hand in progress)
+            # Auto-start hand when we reach min players (if no hand in progress)
             runner = self._manager._tables.get(table_id)
             if runner:
                 player_count = runner.player_count
+                min_players = runner._config.min_players_to_start
                 status = runner._engine._status
                 has_hand = status.value == "running"
-                print(f"[AUTO-START CHECK] table={table_id} players={player_count} status={status} has_hand={has_hand}")
-                if player_count >= 3 and not has_hand:
+                print(f"[AUTO-START CHECK] table={table_id} players={player_count} min={min_players} status={status} has_hand={has_hand}")
+                if player_count >= min_players and not has_hand:
                     print(f"[AUTO-START] Triggering auto-start for table {table_id}")
                     asyncio.create_task(self._auto_start_next_hand(table_id, delay=1.5))
 
@@ -121,13 +122,14 @@ class MessageHandler:
             # Get snapshot FIRST (before registering for broadcasts)
             snapshot = await self._manager.get_snapshot(user_id)
 
-            # Auto-start hand when we reach 3 players
+            # Auto-start hand when we reach min players
             runner = self._manager._tables.get(result_table_id)
             if runner:
                 player_count = runner.player_count
+                min_players = runner._config.min_players_to_start
                 status = runner._engine._status
                 has_hand = status.value == "running"
-                if player_count >= 3 and not has_hand:
+                if player_count >= min_players and not has_hand:
                     asyncio.create_task(self._auto_start_next_hand(result_table_id, delay=1.5))
 
             return (snapshot.model_dump(mode="json"), result_table_id, seat, display_name, buy_in_cents)
@@ -505,15 +507,16 @@ class MessageHandler:
         print(f"[AUTO-START] Waiting {delay}s before starting hand on {table_id}")
         await asyncio.sleep(delay)
 
-        # Check if table still has enough players (minimum 3)
+        # Check if table still has enough players
         runner = self._manager._tables.get(table_id)
         if not runner:
             print(f"[AUTO-START] Table {table_id} not found, aborting")
             return
 
         player_count = runner.player_count
-        if player_count < 3:
-            print(f"[AUTO-START] Not enough players ({player_count}), aborting")
+        min_players = runner._config.min_players_to_start
+        if player_count < min_players:
+            print(f"[AUTO-START] Not enough players ({player_count} < {min_players}), aborting")
             return
 
         # Check if hand already in progress

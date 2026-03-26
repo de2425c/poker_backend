@@ -199,14 +199,18 @@ class PokerTableEngine:
             # First hand: randomize button position
             self._button_seat = random.choice(active_seats)
 
-        # Reorder active seats so SB (seat after button) is index 0
-        # This maps PokerKit's player indices correctly:
-        # - Player 0 = Small Blind (1 after button)
-        # - Player 1 = Big Blind (2 after button)
-        # - Player 2+ = Other positions
+        # Reorder active seats to map to PokerKit's player indices
+        # PokerKit expects blinds in order: player 0 = BB, player N-1 = SB (button in HU)
         button_idx = active_seats.index(self._button_seat)
-        sb_idx = (button_idx + 1) % len(active_seats)
-        self._active_seat_indices = active_seats[sb_idx:] + active_seats[:sb_idx]
+        if len(active_seats) == 2:
+            # HU: PokerKit wants player 0 = BB, player 1 = SB (button)
+            # So BB seat should be index 0, button seat should be index 1
+            bb_idx = (button_idx + 1) % 2
+            self._active_seat_indices = [active_seats[bb_idx], active_seats[button_idx]]
+        else:
+            # 3+ players: SB is seat after button, maps to player 0
+            sb_idx = (button_idx + 1) % len(active_seats)
+            self._active_seat_indices = active_seats[sb_idx:] + active_seats[:sb_idx]
 
         stacks = [self._seats[i].chips for i in self._active_seat_indices]
 
@@ -236,8 +240,14 @@ class PokerTableEngine:
         # In PokerKit with automations, blinds are already posted
         # Generate events for SB and BB
         if len(self._active_seat_indices) >= 2:
-            sb_seat = self._active_seat_indices[0]  # First active seat posts SB
-            bb_seat = self._active_seat_indices[1]  # Second active seat posts BB
+            if len(self._active_seat_indices) == 2:
+                # HU: index 0 = BB, index 1 = SB (button)
+                sb_seat = self._active_seat_indices[1]
+                bb_seat = self._active_seat_indices[0]
+            else:
+                # 3+ players: index 0 = SB, index 1 = BB
+                sb_seat = self._active_seat_indices[0]
+                bb_seat = self._active_seat_indices[1]
 
             events.append(ActionEvent(
                 seat=sb_seat,

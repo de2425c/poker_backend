@@ -60,7 +60,7 @@ class TableRunner:
         return len(self._user_seats)
 
     def has_open_seats(self) -> bool:
-        return self.player_count < 6
+        return self.player_count < self._config.max_players
 
     def has_human_players(self) -> bool:
         """Check if any human (non-bot) players are seated."""
@@ -306,7 +306,7 @@ class TableRunner:
     def _find_open_seat(self) -> Optional[int]:
         """Find the first unoccupied seat."""
         occupied = set(self._user_seats.values())
-        for i in range(6):
+        for i in range(self._config.max_players):
             if i not in occupied:
                 return i
         return None
@@ -351,7 +351,7 @@ class TableRunner:
         # Invert user_seats to get seat -> user_id
         seat_to_user = {v: k for k, v in self._user_seats.items()}
 
-        for i in range(6):
+        for i in range(self._config.max_players):
             seat_state = self._engine._seats[i]
             if seat_state is not None and seat_state.player:
                 user_id = seat_to_user.get(i, "")
