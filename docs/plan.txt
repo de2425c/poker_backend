@@ -1,0 +1,334 @@
+Got it. Your end goal (backend-first) is: **a single authoritative poker server that can create/join a 6-max NLH table, run hands end-to-end with PokerKit, accept player actions over WebSocket, validate them server-side, and broadcast deterministic state updates to connected clients**—with **structured hand logs** and a **chip ledger** persisted.
+
+Below is a plan that’s deliberately broken into **testable checkpoints** so you can stop, validate, and only then move on.
+
+---
+
+## Guiding principles for the MVP backend
+
+1. **Authoritative server**: clients never “apply” game rules—only request actions.
+2. **PokerKit as the single source of truth**: your wrapper orchestrates + serializes.
+3. **Deterministic, replayable**: every hand has an event log (actions + RNG seed or dealt cards in logs).
+4. **State fanout = snapshots + deltas**: snapshots for join/reconnect, deltas for realtime.
+5. **One-table-per-user**: simplifies session/auth, timers, and routing.
+
+---
+
+## Step 0 — Define the protocol + invariants (stop & test: schema validation)
+
+**Deliverables**
+
+* Message types (client→server, server→client)
+* Table state schema (your “TableSnapshot”)
+* Error model
+* Action model + mapping to PokerKit `can_*`/`do_*`
+
+**Recommended message types**
+
+Client → Server:
+
+* `AUTH {token}`
+* `JOIN_POOL {stake_id}`
+* `LEAVE_TABLE {}`
+* `ACTION {hand_id, action_id, type, amount?}`
+* `PING {}`
+
+Server → Client:
+
+* `TABLE_SNAPSHOT {table}`
+* `STATE_DELTA {hand_id, seq, events:[...]}`
+* `ACTION_REQUEST {hand_id, actor_seat, allowed_actions, expires_at}`
+* `ERROR {code, message, details}`
+* `PONG {}`
+
+**Key invariants**
+
+* Every action is idempotent via `(hand_id, action_id)` and server returns same result if replayed.
+* Every state update is ordered via `seq` monotonically increasing per table.
+* Allowed actions exposed are derived from PokerKit `can_*`.
+
+**Stop & test**
+
+* Write JSON schema (or Pydantic models) for all messages.
+* Unit test: invalid messages get `ERROR(code="BAD_REQUEST")`, valid messages parse.
+
+---
+
+## Step 1 — PokerKit wrapper engine (no networking yet) (stop & test: run a full hand in-process)
+
+**Goal**: a pure-Python engine that can:
+
+* create a 6-max NLH 100bb state
+* automate blinds/deal/burn/board/push/pull
+* accept actions (fold/call/check/raise-to)
+* produce **(a)** a serializable snapshot and **(b)** a list of emitted events/deltas
+
+**Deliverables**
+
+* `PokerTableEngine` class:
+
+  * `new_table(config) -> table_id`
+  * `start_hand()`
+  * `get_snapshot()`
+  * `get_allowed_actions(seat) -> [...]`
+  * `apply_action(seat, action) -> events`
+  * `tick(now) -> events` (for timers / auto-fold)
+* `PokerKitAdapter` layer (thin):
+
+  * maps your `Action` into PokerKit operation triplets: `verify / can_* / do`
+
+**Implementation notes**
+
+* Treat PokerKit state as opaque and only interact through official operations.
+* Decide where automation runs:
+
+  * easiest: after every action, call `advance_automations()` that repeatedly applies all available automations until next player decision is needed.
+* Decide what your “event” format is:
+
+  * `PlayerActed`, `StreetDealt`, `PotAwarded`, `HandEnded`, etc.
+  * Your deltas can be either high-level (recommended) or raw PokerKit ops (harder for iOS later).
+
+**Stop & test**
+
+* A deterministic test that:
+
+  1. creates a table
+  2. runs a simple scripted hand (e.g., fold-fold-fold, or open/call/checkdown)
+  3. asserts:
+
+     * no illegal actions accepted
+     * pot size and stacks match expected at end
+     * snapshot serialization round-trips (to/from JSON)
+
+---
+
+## Step 2 — In-memory Table Manager (stop & test: multi-table simulation + concurrency safety)
+
+**Goal**: manage active tables, players, and routing without WS yet.
+
+**Deliverables**
+
+* `TableManager`:
+
+  * `create_table(stake_id)`
+  * `add_player(user_id) -> table_id, seat`
+  * `remove_player(user_id)`
+  * `route_action(user_id, action)`
+  * `get_table_for_user(user_id)`
+* A single-threaded event loop approach (strongly recommended):
+
+  * Each table has an **async queue** of inbound commands.
+  * Only one consumer processes that table queue ⇒ no race conditions inside PokerKit.
+
+**Stop & test**
+
+* Simulate 10 tables in pytest/unittest:
+
+  * random joins/leaves/actions
+  * assert no two players share same seat
+  * assert no exceptions / deadlocks
+  * assert actions processed in order per table
+
+---
+
+## Step 3 — WebSocket server “table sandbox” (stop & test: one table playable via CLI)
+
+**Goal**: talk to your engine over WS and see correct snapshots/deltas.
+
+**Deliverables**
+
+* WS endpoints:
+
+  * connect → authenticate → join
+  * `ACTION` route to `TableManager`
+* Snapshot/delta broadcast:
+
+  * On join/reconnect: send `TABLE_SNAPSHOT`
+  * On each processed action / automation: send `STATE_DELTA` (and sometimes `ACTION_REQUEST`)
+* Minimal HTTP endpoints (optional but handy):
+
+  * `GET /health`
+  * `POST /debug/create_table`
+  * `GET /debug/table/{id}` (only in dev)
+
+**Stop & test**
+
+* Build a tiny CLI “bot client” (Python script) that:
+
+  * connects 2–6 clients
+  * joins same stake
+  * plays random legal actions until hand ends
+  * validates:
+
+    * every client receives same `seq` stream
+    * reconnect gets a snapshot with latest `seq`
+    * duplicate `ACTION(action_id)` is idempotent
+
+---
+
+## Step 4 — Turn timers + auto-actions (stop & test: force timeout behavior)
+
+**Goal**: timers are server-authoritative and cannot be bypassed.
+
+**Deliverables**
+
+* Timer model:
+
+  * `action_deadline` per decision
+  * `tick()` runs on a global scheduler (e.g., every 250ms) and enqueues timeout commands to tables
+* Timeout policy:
+
+  * Default: if facing bet → **fold**, else **check**.
+  * Preflop in blinds if unopened: can allow check or auto-check.
+* WS push:
+
+  * include `expires_at` in `ACTION_REQUEST`
+
+**Stop & test**
+
+* Integration test:
+
+  * connect 2 clients
+  * stall actor past deadline
+  * confirm server auto-acts
+  * confirm hand continues cleanly
+  * confirm client cannot submit late action (gets `ERROR(code="ACTION_EXPIRED")`)
+
+---
+
+## Step 5 — Structured hand logging + chip ledger (stop & test: replay & audit)
+
+You mentioned: “hand summaries + duplicated chip ledger to Firestore.”
+
+**Deliverables**
+
+* `HandLog` (append-only):
+
+  * hand_id, table_id, stake_id, start_ts/end_ts
+  * seats with user_ids
+  * blind postings
+  * full action sequence with timestamps and amounts
+  * board runout + showdown (for now you can log privately; later decide what to expose)
+  * final stack deltas per seat
+* `ChipLedger` (accounting-grade):
+
+  * `ledger_entry_id`
+  * user_id
+  * delta
+  * reason (BLIND, BET, WIN, TOPUP, BUYIN)
+  * hand_id/table_id
+  * created_at
+* Write path:
+
+  * Buffer in memory during hand
+  * On `HandEnded`, flush to Firestore in one transaction-ish batch (best-effort)
+  * If write fails: push to retry queue (in-memory for MVP)
+
+**Stop & test**
+
+* Replay test:
+
+  * take stored hand events
+  * re-run through engine in a “replay mode”
+  * assert final stacks match ledger deltas exactly
+
+---
+
+## Step 6 — Deployment on Cloud Run (stop & test: real WS + reconnect)
+
+**Key Cloud Run reality check**
+
+* WebSockets work on Cloud Run, but you need to design for:
+
+  * instance restarts
+  * multiple instances (scaling) ⇒ your in-memory tables won’t be shared
+
+**MVP-friendly approach**
+
+* Force single instance for the MVP demo:
+
+  * set min instances = 1, max instances = 1 (or keep concurrency low)
+* Sticky routing is not guaranteed; so implement reconnect + snapshot.
+
+**Deliverables**
+
+* Health checks, structured logging
+* Basic auth token verification
+* Environment config for stakes, timers, etc.
+
+**Stop & test**
+
+* Deploy
+* Connect 2–6 phones (or simulators)
+* Play full hands
+* Kill instance → verify clients reconnect and recover gracefully (or at least fail cleanly)
+
+---
+
+## Step 7 — “Zoom pooling” as a separate subsystem (stop & test: reseat correctness)
+
+Once the core single-table is solid, you can add zoom pooling without rewriting the engine.
+
+**Deliverables**
+
+* `PoolManager(stake_id)`:
+
+  * maintains a queue of waiting players
+  * fills tables (or continuously reseats into active tables)
+* Reseating rule: “join reseat pool on folds”
+
+  * after fold, player is removed at hand end and placed back into pool
+  * ensure you don’t reseat mid-hand
+* Constraints:
+
+  * one table per user
+  * 100bb top-up allowed before being seated
+
+**Stop & test**
+
+* Simulation test:
+
+  * 100 bots joining/leaving
+  * assert:
+
+    * no user in two tables
+    * seat counts never exceed 6
+    * after fold, user gets reseated within N hands on average
+    * no table deadlocks with <2 players (define policy)
+
+---
+
+# What I would build first (in order)
+
+If you want the shortest path to “actions over requests”:
+
+1. **Protocol + Pydantic models** (Step 0)
+2. **PokerTableEngine** with automations (Step 1)
+3. **TableManager with per-table queues** (Step 2)
+4. **WS server + CLI bots** (Step 3)
+5. **Timers** (Step 4)
+6. **Logs + ledger** (Step 5)
+7. **Cloud Run deploy** (Step 6)
+8. **Zoom pooling** (Step 7)
+
+This matches your intuition: backend state management first, iOS later.
+
+---
+
+## Minimal “definition of done” for backend v1
+
+You can declare backend “ready for iOS wiring” when:
+
+* 6 players can join the same table, play full hands end-to-end
+* every action is validated server-side; illegal actions never mutate state
+* reconnect always yields a consistent `TABLE_SNAPSHOT` with the latest `seq`
+* timeouts produce correct auto-actions
+* every hand produces a persisted log + ledger that can be replayed/audited
+
+---
+
+If you want, I can also give you:
+
+* a concrete folder/module layout (engine/, protocol/, server/, storage/)
+* the exact shape of a `TableSnapshot` that’s iOS-friendly (cards hidden per player, allowed actions per seat, etc.)
+* a very small “bot client” design that acts as your first integration test harness

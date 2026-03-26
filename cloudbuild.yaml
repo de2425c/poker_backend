@@ -1,0 +1,54 @@
+# Cloud Build configuration for Poker Backend
+# Builds and deploys to Cloud Run with single instance (MVP mode)
+
+steps:
+  # Build the container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/poker-backend:latest'
+      - '.'
+
+  # Push the container image to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'gcr.io/$PROJECT_ID/poker-backend:latest'
+
+  # Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'poker-backend'
+      - '--image'
+      - 'gcr.io/$PROJECT_ID/poker-backend:latest'
+      - '--region'
+      - 'us-central1'
+      - '--platform'
+      - 'managed'
+      # Single instance for MVP (avoids shared state issues)
+      - '--min-instances'
+      - '1'
+      - '--max-instances'
+      - '1'
+      # Memory allocation
+      - '--memory'
+      - '512Mi'
+      # Extended timeout for WebSocket connections (1 hour)
+      - '--timeout'
+      - '3600'
+      # Allow unauthenticated (auth handled at app level)
+      - '--allow-unauthenticated'
+      # Environment variables
+      - '--set-env-vars'
+      - 'AUTH_ENABLED=true'
+
+# Store images in Container Registry
+images:
+  - 'gcr.io/$PROJECT_ID/poker-backend:latest'
+
+# Build timeout (10 minutes)
+timeout: '600s'
