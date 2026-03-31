@@ -376,6 +376,7 @@ _OPENBOT_PYTHON = os.environ.get(
     os.path.join(_OPENBOT_CWD, "venv", "bin", "python"),
 )
 _OPENBOT_POLICY = os.environ.get("OPENBOT_POLICY", "/home/de2425/policy_iter200M.db")
+_OPENBOT_HU_POLICY = os.environ.get("OPENBOT_HU_POLICY", "/home/de2425/policy_2m.db")
 _USE_PREFLOP_DB = os.environ.get("USE_PREFLOP_DB", "false").lower() == "true"  # Toggle: use preflop_ranges.db or main policy
 _SOLVER_BIN = os.environ.get("SOLVER_BIN", "/home/de2425/poker_solver/cpp/build/river_solver_optimized")
 
@@ -400,6 +401,7 @@ async def _spawn_bot(
         "--table-id", table_id,
         "--user-id", bot_user_id,
         "--policy", _OPENBOT_POLICY,
+        "--hu-policy", _OPENBOT_HU_POLICY,
         "--display-name", display_name,
         "--stake", stake_id,
         "--buy-in", str(buy_in_cents),
@@ -452,6 +454,7 @@ async def _spawn_bot_process(
         "--table-id", table_id,
         "--num-bots", str(bot_count),
         "--policy", _OPENBOT_POLICY,
+        "--hu-policy", _OPENBOT_HU_POLICY,
         "--abstraction-dir", "models/checkpoints",
         "--stake", stake_id,
         "--buy-in", str(buy_in_cents),
@@ -751,12 +754,17 @@ async def websocket_endpoint(websocket: WebSocket):
 
             elif msg_type == "CREATE_BOT_TABLE":
                 try:
+                    # Auto-calculate bot_count from stake's max_players if not provided
+                    stake_id = data.get("stake_id", "nlh_1_2")
+                    stake_config = manager._stake_configs.get(stake_id)
+                    default_bot_count = (stake_config.max_players - 1) if stake_config else 5
+
                     response = await _create_bot_table(
                         user_id=user_id,
-                        stake_id=data.get("stake_id", "nlh_1_2"),
+                        stake_id=stake_id,
                         buy_in_cents=data.get("buy_in_cents", 20000),
                         display_name=data.get("display_name", "Player"),
-                        bot_count=data.get("bot_count", 5),
+                        bot_count=data.get("bot_count") or default_bot_count,
                         auto_top_up=data.get("auto_top_up", True),
                         blitz_mode=data.get("blitz_mode", False),
                         persona_ids=data.get("persona_ids"),
