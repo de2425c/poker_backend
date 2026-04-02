@@ -174,7 +174,7 @@ class TableRunner:
             return []  # Return empty events, silently ignore
 
         print(f"TableRunner: Calling apply_action for seat {seat}")
-        events = self._engine.apply_action(seat, cmd.action, cmd.amount)
+        events = self._engine.apply_action(seat, cmd.action, cmd.amount, cmd.decision_metadata)
 
         # Buffer events for logging
         if self._hand_logger and self._hand_buffer.is_active:

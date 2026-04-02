@@ -163,7 +163,8 @@ class TableManager:
         user_id: str,
         hand_id: str,
         action: ClientAction,
-        amount: Optional[Chips] = None
+        amount: Optional[Chips] = None,
+        decision_metadata: Optional[dict] = None,
     ) -> list:
         """Route a player action to their table. Returns events."""
         table_id = self._user_tables.get(user_id)
@@ -180,6 +181,7 @@ class TableManager:
             action=action,
             amount=amount,
             result_future=future,
+            decision_metadata=decision_metadata,
         ))
 
         return await future

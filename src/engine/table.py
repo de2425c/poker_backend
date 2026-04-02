@@ -283,7 +283,7 @@ class PokerTableEngine:
 
         return self._adapter.get_allowed_actions()
 
-    def apply_action(self, seat: int, action: ClientAction, amount: Optional[Chips] = None) -> list:
+    def apply_action(self, seat: int, action: ClientAction, amount: Optional[Chips] = None, decision_metadata: Optional[dict] = None) -> list:
         """
         Apply a player action.
 
@@ -291,6 +291,7 @@ class PokerTableEngine:
             seat: Table seat index
             action: The action to take
             amount: Required for BET/RAISE_TO
+            decision_metadata: Optional bot decision context (solver data, ranges, etc.)
 
         Returns:
             List of events generated
@@ -349,6 +350,7 @@ class PokerTableEngine:
             amount=effective_amount,
             is_all_in=is_all_in,
             showdown_hands=action_showdown_hands,
+            decision_metadata=decision_metadata,
         ))
 
         # Check for street change

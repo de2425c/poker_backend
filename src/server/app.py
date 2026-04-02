@@ -785,6 +785,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     data.get("action_id"),
                     data.get("action"),
                     data.get("amount_cents"),
+                    data.get("decision_metadata"),
                 )
                 if response:  # Error response
                     await websocket.send_json(response)

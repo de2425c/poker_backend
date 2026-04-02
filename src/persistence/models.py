@@ -41,6 +41,7 @@ class ActionRecord:
     is_all_in: bool
     street: str = "preflop"  # preflop, flop, turn, river
     timestamp: Optional[datetime] = None
+    decision_metadata: Optional[dict] = None  # Bot decision context (solver data, ranges, etc.)
 
     def to_dict(self) -> dict:
         d = asdict(self)

@@ -177,6 +177,7 @@ class MessageHandler:
         action_id: str,
         action: str,
         amount_cents: Optional[int],
+        decision_metadata: Optional[dict] = None,
     ) -> Optional[dict]:
         """
         Handle ACTION message.
@@ -220,7 +221,7 @@ class MessageHandler:
             client_action = ClientAction(action)
             amount = Chips(amount=amount_cents) if amount_cents else None
 
-            events = await self._manager.route_action(user_id, hand_id, client_action, amount)
+            events = await self._manager.route_action(user_id, hand_id, client_action, amount, decision_metadata)
 
             # Mark as processed (with timestamp for cleanup)
             self._processed_actions[action_id] = time.time()

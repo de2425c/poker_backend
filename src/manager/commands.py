@@ -36,6 +36,7 @@ class PlayerActionCommand:
     action: ClientAction
     amount: Optional[Chips]
     result_future: asyncio.Future  # Resolves to list[events] or raises
+    decision_metadata: Optional[dict] = None  # Bot decision context
 
 
 @dataclass

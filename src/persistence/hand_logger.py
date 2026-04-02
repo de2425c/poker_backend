@@ -140,6 +140,7 @@ class HandLogger:
                     is_all_in=event.is_all_in,
                     street=current_street,
                     timestamp=datetime.utcnow(),
+                    decision_metadata=event.decision_metadata,
                 ))
 
                 # Track chips put into pot per street

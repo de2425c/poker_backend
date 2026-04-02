@@ -256,6 +256,9 @@ class ActionEvent(BaseModel):
     showdown_hands: Optional[list["ShowdownHand"]] = Field(
         None, description="Hole cards revealed when this action triggers an all-in runout"
     )
+    decision_metadata: Optional[dict] = Field(
+        None, description="Bot decision context (solver data, ranges, action probs)"
+    )
 
 
 class StreetDealtEvent(BaseModel):
