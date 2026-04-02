@@ -104,19 +104,15 @@ def describe_hand(hero_hand: str, board: str) -> str:
 
 SYSTEM_PROMPT = """You are a poker coach. Read the "Hero hand description" field carefully - it tells you EXACTLY what hero has.
 
-CRITICAL: A flush requires 5 cards of the same suit. If it says "FLUSH DRAW" that means hero does NOT have a flush yet.
-
-Output ONLY one educational insight (1-2 sentences) explaining why the solver recommends this action. No preamble.
+Output ONLY one educational insight (1-2 sentences)No preamble.
 
 Good insights:
 - "With the nut flush draw and an overpair, jamming applies maximum pressure and denies villain's equity."
-- "Your As blocks the nut flush draws villain would fold, making this a poor bluff candidate."
-- "On paired boards, overpairs should check more because villain's raising range is full-house heavy."
+- "Your As blocks misses flush draws, making this a bad bluff candidate."
+- "On paired boards, using big sizes is often a mistake because villain's range is polarized to very strong hands such as trips and full houses. "
 
 Avoid:
-- EV numbers (beginners don't understand them)
-- Saying hero has a flush when description says "FLUSH DRAW"
-- Generic advice that doesn't reference this specific hand"""
+- EV numbers (beginners don't understand them"""
 
 
 def build_user_prompt(request: InsightRequest) -> str:
@@ -180,13 +176,20 @@ def build_user_prompt(request: InsightRequest) -> str:
 class InsightGenerator:
     """Generate poker insights using Claude API."""
 
-    def __init__(self, api_key: str | None = None, model: str = "claude-sonnet-4-20250514"):
+    def __init__(
+        self,
+        api_key: str | None = None,
+        model: str = "claude-sonnet-4-20250514",
+        concepts_path: str | None = None
+    ):
         """
         Initialize the insight generator.
 
         Args:
             api_key: Anthropic API key. If not provided, reads from ANTHROPIC_API_KEY env var.
             model: Model to use for generation.
+            concepts_path: Path to concepts JSON file for RAG. If provided, relevant
+                concepts will be injected into prompts.
         """
         # Import here to allow module-level functions (build_user_prompt, SYSTEM_PROMPT)
         # to be used without requiring anthropic to be installed
@@ -199,6 +202,12 @@ class InsightGenerator:
         self.client = Anthropic(api_key=self.api_key)
         self.model = model
 
+        # Initialize concept matcher if path provided
+        self.concept_matcher = None
+        if concepts_path:
+            from .concept_matcher import ConceptMatcher
+            self.concept_matcher = ConceptMatcher(concepts_path)
+
     def generate(self, request: InsightRequest) -> InsightResponse:
         """
         Generate an insight for the given request.
@@ -210,6 +219,12 @@ class InsightGenerator:
             InsightResponse with the generated insight.
         """
         user_prompt = build_user_prompt(request)
+
+        # Add concept context if available (RAG)
+        if self.concept_matcher:
+            concept_context = self.concept_matcher.get_concept_context(request)
+            if concept_context:
+                user_prompt = concept_context + "\n\n" + user_prompt
 
         message = self.client.messages.create(
             model=self.model,
