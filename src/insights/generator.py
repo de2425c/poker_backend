@@ -180,7 +180,9 @@ class InsightGenerator:
         self,
         api_key: str | None = None,
         model: str = "claude-sonnet-4-20250514",
-        concepts_path: str | None = None
+        concepts_path: str | None = None,
+        use_vector_search: bool = False,
+        pinecone_index: str = "poker-rag"
     ):
         """
         Initialize the insight generator.
@@ -188,11 +190,10 @@ class InsightGenerator:
         Args:
             api_key: Anthropic API key. If not provided, reads from ANTHROPIC_API_KEY env var.
             model: Model to use for generation.
-            concepts_path: Path to concepts JSON file for RAG. If provided, relevant
-                concepts will be injected into prompts.
+            concepts_path: Path to concepts JSON file for tag-based RAG (legacy).
+            use_vector_search: If True, use Pinecone vector search for RAG.
+            pinecone_index: Pinecone index name (if use_vector_search=True).
         """
-        # Import here to allow module-level functions (build_user_prompt, SYSTEM_PROMPT)
-        # to be used without requiring anthropic to be installed
         from anthropic import Anthropic
 
         self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
@@ -202,9 +203,14 @@ class InsightGenerator:
         self.client = Anthropic(api_key=self.api_key)
         self.model = model
 
-        # Initialize concept matcher if path provided
+        # Initialize vector store or concept matcher
+        self.vector_store = None
         self.concept_matcher = None
-        if concepts_path:
+
+        if use_vector_search:
+            from .vector_store import PokerVectorStore
+            self.vector_store = PokerVectorStore(index_name=pinecone_index)
+        elif concepts_path:
             from .concept_matcher import ConceptMatcher
             self.concept_matcher = ConceptMatcher(concepts_path)
 
@@ -219,12 +225,16 @@ class InsightGenerator:
             InsightResponse with the generated insight.
         """
         user_prompt = build_user_prompt(request)
+        rag_context = ""
 
-        # Add concept context if available (RAG)
-        if self.concept_matcher:
-            concept_context = self.concept_matcher.get_concept_context(request)
-            if concept_context:
-                user_prompt = concept_context + "\n\n" + user_prompt
+        # Add RAG context from vector search or concept matcher
+        if self.vector_store:
+            rag_context = self._get_vector_context(request)
+        elif self.concept_matcher:
+            rag_context = self.concept_matcher.get_concept_context(request)
+
+        if rag_context:
+            user_prompt = rag_context + "\n\n" + user_prompt
 
         message = self.client.messages.create(
             model=self.model,
@@ -241,6 +251,31 @@ class InsightGenerator:
             prompt_tokens=message.usage.input_tokens,
             completion_tokens=message.usage.output_tokens,
         )
+
+    def _get_vector_context(self, request: InsightRequest) -> str:
+        """Build RAG context from vector search results."""
+        from .vector_store import build_situation_query
+
+        query = build_situation_query(request)
+        results = self.vector_store.search(query, n_concepts=3, n_textbook=1)
+
+        lines = []
+
+        # Add concepts
+        if results["concepts"]:
+            lines.append("Relevant poker concepts:")
+            for c in results["concepts"]:
+                lines.append(f"- **{c['name']}**: {c['insight']}")
+
+        # Add textbook excerpt
+        if results["textbook"]:
+            lines.append("\nFrom poker textbook:")
+            for t in results["textbook"]:
+                # Truncate to ~500 chars
+                text = t["text"][:500].strip()
+                lines.append(f"[{t['chapter']}]: {text}...")
+
+        return "\n".join(lines)
 
     def generate_batch(self, requests: list[InsightRequest]) -> list[InsightResponse]:
         """
